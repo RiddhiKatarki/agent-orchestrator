@@ -11,7 +11,7 @@ from typing import Any, TYPE_CHECKING
 MAX_CONTINUATIONS = 2  # retries when the model hits max_tokens mid-response
 
 import anthropic
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from rich.console import Console
 
 if TYPE_CHECKING:
@@ -68,8 +68,10 @@ class Agent(ABC):
     timeout_action   : What to do on timeout — "skip" (default, log and continue),
                        "raise" (propagate TimeoutError), or a fallback Agent instance
                        that runs in place of the timed-out agent.
-    error_fallback   : Agent to run if this agent raises any exception. If None,
-                       the exception propagates normally.
+    error_fallback         : Agent to run if this agent raises any exception. If None,
+                             the exception propagates normally.
+    max_validation_retries : Times to re-prompt the model after a schema validation
+                             failure, feeding back the exact Pydantic error. Default 2.
     """
 
     name: str = "Agent"
@@ -87,6 +89,7 @@ class Agent(ABC):
     timeout_seconds: float | None = None  # None = no timeout
     timeout_action: "str | Agent" = "skip"  # "skip", "raise", or a fallback Agent
     error_fallback: "Agent | None" = None  # agent to run if this one raises an exception
+    max_validation_retries: int = 2  # re-prompt the model with the error on schema mismatch
 
     # ------------------------------------------------------------------
     # Override in subclasses
@@ -329,7 +332,8 @@ class Agent(ABC):
         retries = 0
 
         try:
-            prompt = self.build_prompt(board)
+            base_prompt = self.build_prompt(board)
+            prompt = base_prompt
             total_input_tokens = total_output_tokens = 0
             accumulated = ""
 
@@ -361,7 +365,50 @@ class Agent(ABC):
                         f"Partial output so far:\n{exc.partial}"
                     )
 
-            result = self.parse_output(accumulated)
+            result = None
+            validation_prompt = base_prompt
+            for val_attempt in range(self.max_validation_retries + 1):
+                try:
+                    result = self.parse_output(accumulated)
+                    break  # parsed successfully
+                except (ValidationError, json.JSONDecodeError) as parse_exc:
+                    if val_attempt == self.max_validation_retries:
+                        raise
+                    retries += 1
+                    console.print(
+                        f"\n[yellow]⟳ {self.name}: validation failed "
+                        f"(attempt {val_attempt + 1}/{self.max_validation_retries}), "
+                        f"re-prompting with error…[/yellow]"
+                    )
+                    validation_prompt = (
+                        f"{base_prompt}\n\n"
+                        f"Your previous response failed schema validation with this error:\n"
+                        f"{parse_exc}\n\n"
+                        f"Your previous (invalid) output was:\n{accumulated}\n\n"
+                        f"Please respond again with valid JSON matching the required schema."
+                    )
+                    accumulated = ""
+                    # Re-run the API call with the correction prompt
+                    for attempt in range(MAX_CONTINUATIONS + 1):
+                        usage = {}
+                        try:
+                            raw, usage = self._call_api(validation_prompt)
+                            accumulated += raw
+                            total_input_tokens += usage["input_tokens"]
+                            total_output_tokens += usage["output_tokens"]
+                            break
+                        except TruncationError as trunc_exc:
+                            accumulated += trunc_exc.partial
+                            total_output_tokens += usage.get("output_tokens", 0)
+                            retries += 1
+                            if attempt == MAX_CONTINUATIONS:
+                                break
+                            validation_prompt = (
+                                "Continue the JSON exactly from where you stopped. "
+                                "Do not repeat or summarise anything. "
+                                f"Partial output so far:\n{trunc_exc.partial}"
+                            )
+
             self.write_outputs(result, board)
 
             if tracer:
