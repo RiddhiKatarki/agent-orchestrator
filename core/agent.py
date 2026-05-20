@@ -62,8 +62,12 @@ class Agent(ABC):
                     parsed as JSON and validated against this schema.
     reads         : Blackboard keys this agent reads.
     writes        : Blackboard keys this agent writes.
-    max_tokens    : Hard token cap for the response.
-    use_thinking  : Whether to enable extended thinking (Anthropic only).
+    max_tokens       : Hard token cap for the response.
+    use_thinking     : Whether to enable extended thinking (Anthropic only).
+    timeout_seconds  : Cancel the agent after this many seconds. None = no limit.
+    timeout_action   : What to do on timeout — "skip" (default, log and continue),
+                       "raise" (propagate TimeoutError), or a fallback Agent instance
+                       that runs in place of the timed-out agent.
     """
 
     name: str = "Agent"
@@ -78,6 +82,8 @@ class Agent(ABC):
     writes: list[str] = []
     max_tokens: int = 8192
     use_thinking: bool = True
+    timeout_seconds: float | None = None  # None = no timeout
+    timeout_action: "str | Agent" = "skip"  # "skip", "raise", or a fallback Agent
 
     # ------------------------------------------------------------------
     # Override in subclasses
