@@ -8,6 +8,8 @@ import time
 from abc import ABC
 from typing import Any, TYPE_CHECKING
 
+MAX_CONTINUATIONS = 2  # retries when the model hits max_tokens mid-response
+
 import anthropic
 from pydantic import BaseModel
 from rich.console import Console
@@ -17,6 +19,18 @@ if TYPE_CHECKING:
     from orchestrator.core.tracer import Tracer
 
 console = Console()
+
+
+class TruncationError(RuntimeError):
+    """Raised when the model stops because it hit max_tokens mid-response."""
+
+    def __init__(self, agent_name: str, max_tokens: int, chars_so_far: int):
+        super().__init__(
+            f"{agent_name} hit max_tokens={max_tokens} after {chars_so_far} chars. "
+            "Will retry with a continuation prompt."
+        )
+        self.partial: str = ""  # populated by the caller before raising
+
 
 DEFAULT_MODEL = "claude-opus-4-6"
 
@@ -214,7 +228,14 @@ class Agent(ABC):
             final = stream.get_final_message()
 
         console.print()
-        return "".join(collected), {
+        full_text = "".join(collected)
+
+        if final.stop_reason == "max_tokens":
+            err = TruncationError(self.name, self.max_tokens, len(full_text))
+            err.partial = full_text
+            raise err
+
+        return full_text, {
             "input_tokens": final.usage.input_tokens,
             "output_tokens": final.usage.output_tokens,
         }
@@ -257,17 +278,28 @@ class Agent(ABC):
             stream_options={"include_usage": True},
         )
 
+        truncated = False
         for chunk in stream:
-            delta = chunk.choices[0].delta if chunk.choices else None
-            if delta and delta.content:
-                collected.append(delta.content)
-                console.print(delta.content, end="")
+            if chunk.choices:
+                delta = chunk.choices[0].delta
+                if delta and delta.content:
+                    collected.append(delta.content)
+                    console.print(delta.content, end="")
+                if chunk.choices[0].finish_reason == "length":
+                    truncated = True
             if chunk.usage:
                 input_tokens = chunk.usage.prompt_tokens or 0
                 output_tokens = chunk.usage.completion_tokens or 0
 
         console.print()
-        return "".join(collected), {
+        full_text = "".join(collected)
+
+        if truncated:
+            err = TruncationError(self.name, self.max_tokens, len(full_text))
+            err.partial = full_text
+            raise err
+
+        return full_text, {
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
         }
@@ -289,16 +321,46 @@ class Agent(ABC):
 
         try:
             prompt = self.build_prompt(board)
-            raw, usage = self._call_api(prompt)
-            result = self.parse_output(raw)
+            total_input_tokens = total_output_tokens = 0
+            accumulated = ""
+
+            for attempt in range(MAX_CONTINUATIONS + 1):
+                usage: dict[str, int] = {}
+                try:
+                    raw, usage = self._call_api(prompt)
+                    accumulated += raw
+                    total_input_tokens += usage["input_tokens"]
+                    total_output_tokens += usage["output_tokens"]
+                    break  # clean finish_reason=stop — done
+                except TruncationError as exc:
+                    accumulated += exc.partial
+                    total_output_tokens += usage.get("output_tokens", 0)
+                    retries += 1
+                    if attempt == MAX_CONTINUATIONS:
+                        console.print(
+                            f"\n[bold yellow]⚠ {self.name}: truncated after "
+                            f"{MAX_CONTINUATIONS} continuations — parsing partial output[/bold yellow]"
+                        )
+                        break
+                    console.print(
+                        f"\n[yellow]↩ {self.name}: truncated, continuing "
+                        f"(attempt {attempt + 2}/{MAX_CONTINUATIONS + 1})…[/yellow]"
+                    )
+                    prompt = (
+                        "Continue the JSON exactly from where you stopped. "
+                        "Do not repeat or summarise anything. "
+                        f"Partial output so far:\n{exc.partial}"
+                    )
+
+            result = self.parse_output(accumulated)
             self.write_outputs(result, board)
 
             if tracer:
                 tracer.on_agent_end(
                     self.name,
                     success=True,
-                    input_tokens=usage["input_tokens"],
-                    output_tokens=usage["output_tokens"],
+                    input_tokens=total_input_tokens,
+                    output_tokens=total_output_tokens,
                     retries=retries,
                 )
 
