@@ -133,6 +133,19 @@ class Pipeline:
         return self
 
     # ------------------------------------------------------------------
+    # Inspection
+    # ------------------------------------------------------------------
+
+    def preview(self) -> "Pipeline":
+        """
+        Print the pipeline DAG to the terminal without running it.
+        Returns self so it can be chained: pipeline.preview().run(...)
+        """
+        from orchestrator.rendering.dag import render
+        render(self, tracer=None)
+        return self
+
+    # ------------------------------------------------------------------
     # Execution
     # ------------------------------------------------------------------
 
@@ -141,19 +154,24 @@ class Pipeline:
         initial: "str | dict[str, Any] | None" = None,
         *,
         tracer: "Tracer | None" = None,
+        show_dag: bool = False,
     ) -> Blackboard:
         """
         Execute the pipeline synchronously.
 
         Parameters
         ----------
-        initial : Seed the blackboard before any agent runs.
-                  - str  → written as board["input"]
-                  - dict → each key/value written to the board
-        tracer  : Optional Tracer to record token usage and timing.
+        initial  : Seed the blackboard before any agent runs.
+                   - str  → written as board["input"]
+                   - dict → each key/value written to the board
+        tracer   : Optional Tracer to record token usage and timing.
+        show_dag : If True, render the pipeline DAG before execution starts.
 
         Returns the final Blackboard state.
         """
+        if show_dag:
+            self.preview()
+
         board = Blackboard()
 
         if isinstance(initial, str):
@@ -165,10 +183,6 @@ class Pipeline:
         executor = Executor(tracer=tracer)
         anyio.run(executor.run_pipeline, self._nodes, board)
         return board
-
-    # ------------------------------------------------------------------
-    # Inspection
-    # ------------------------------------------------------------------
 
     def __repr__(self) -> str:
         return f"Pipeline(name={self.name!r}, nodes={len(self._nodes)})"
