@@ -26,38 +26,56 @@ console = Console()
 
 async def _run_with_timeout(agent: "Agent", board: "Blackboard", tracer: "Tracer | None") -> None:
     """
-    Run an agent with optional timeout enforcement.
+    Run an agent with optional timeout and error-fallback enforcement.
 
-    Behaviour on expiry is controlled by agent.timeout_action:
-      "skip"        — log a warning and continue (default)
-      "raise"       — raise TimeoutError, aborting the pipeline
-      <Agent>       — run the fallback agent instead
+    Timeout behaviour (agent.timeout_action):
+      "skip"    — log a warning and continue
+      "raise"   — raise TimeoutError, aborting the pipeline
+      <Agent>   — run the fallback agent instead
+
+    Error fallback (agent.error_fallback):
+      None      — exception propagates normally
+      <Agent>   — run this agent instead when any exception is raised
     """
     timeout = agent.timeout_seconds
-    if timeout is None:
-        await anyio.to_thread.run_sync(lambda: agent.run(board, tracer))
-        return
 
-    with anyio.move_on_after(timeout) as scope:
-        await anyio.to_thread.run_sync(lambda: agent.run(board, tracer))
+    try:
+        if timeout is None:
+            await anyio.to_thread.run_sync(lambda: agent.run(board, tracer))
+            return
 
-    if scope.cancelled_caught:
-        action = agent.timeout_action
-        if action == "skip":
-            console.print(
-                f"\n[bold yellow]⏱ {agent.name} timed out after {timeout}s — skipping[/bold yellow]"
-            )
-        elif action == "raise":
-            raise TimeoutError(
-                f"{agent.name} exceeded timeout_seconds={timeout}"
-            )
-        else:
-            # Assume it's a fallback Agent instance
-            console.print(
-                f"\n[bold yellow]⏱ {agent.name} timed out after {timeout}s — "
-                f"running fallback: {action.name}[/bold yellow]"
-            )
-            await anyio.to_thread.run_sync(lambda: action.run(board, tracer))
+        with anyio.move_on_after(timeout) as scope:
+            await anyio.to_thread.run_sync(lambda: agent.run(board, tracer))
+
+        if scope.cancelled_caught:
+            action = agent.timeout_action
+            if action == "skip":
+                console.print(
+                    f"\n[bold yellow]⏱ {agent.name} timed out after {timeout}s — skipping[/bold yellow]"
+                )
+            elif action == "raise":
+                raise TimeoutError(
+                    f"{agent.name} exceeded timeout_seconds={timeout}"
+                )
+            else:
+                # Assume it's a fallback Agent instance
+                console.print(
+                    f"\n[bold yellow]⏱ {agent.name} timed out after {timeout}s — "
+                    f"running fallback: {action.name}[/bold yellow]"
+                )
+                await anyio.to_thread.run_sync(lambda: action.run(board, tracer))
+
+    except TimeoutError:
+        raise  # timeout_action="raise" is intentional — don't intercept with error_fallback
+    except Exception as exc:
+        fallback = agent.error_fallback
+        if fallback is None:
+            raise
+        console.print(
+            f"\n[bold red]✖ {agent.name} failed: {exc}[/bold red]"
+            f"\n[yellow]  → running error fallback: {fallback.name}[/yellow]"
+        )
+        await anyio.to_thread.run_sync(lambda: fallback.run(board, tracer))
 
 
 class Executor:

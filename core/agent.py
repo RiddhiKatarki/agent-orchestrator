@@ -68,6 +68,8 @@ class Agent(ABC):
     timeout_action   : What to do on timeout — "skip" (default, log and continue),
                        "raise" (propagate TimeoutError), or a fallback Agent instance
                        that runs in place of the timed-out agent.
+    error_fallback   : Agent to run if this agent raises any exception. If None,
+                       the exception propagates normally.
     """
 
     name: str = "Agent"
@@ -84,6 +86,7 @@ class Agent(ABC):
     use_thinking: bool = True
     timeout_seconds: float | None = None  # None = no timeout
     timeout_action: "str | Agent" = "skip"  # "skip", "raise", or a fallback Agent
+    error_fallback: "Agent | None" = None  # agent to run if this one raises an exception
 
     # ------------------------------------------------------------------
     # Override in subclasses
