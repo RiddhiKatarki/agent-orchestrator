@@ -11,17 +11,28 @@ A lightweight Python framework for building multi-agent LLM pipelines. Define co
 - **DAG visualiser** — prints the pipeline structure as a Rich tree after each run
 - **Multi-backend** — Anthropic API out of the box; any OpenAI-compatible API (Redpill, Groq, Ollama) via env vars
 - **Structured output** — Pydantic-validated JSON responses with automatic fence stripping and control character sanitisation
+- **Streaming truncation recovery** — automatically continues generation when a model hits `max_tokens` mid-response
+- **Agent timeouts** — cancel slow agents after a configurable deadline with skip / raise / fallback actions
+- **Error-based fallback** — run a substitute agent when the primary agent raises any exception
+- **Schema validation feedback loop** — re-prompts the model with the exact Pydantic error on parse failure
+- **Streamlit UI** — no-code pipeline builder: compose agents visually, seed the blackboard, preview the DAG, and inspect results
 
 ## Installation
 
 ```bash
-pip install anthropic anyio pydantic rich
+pip install anthropic anyio pydantic rich pyyaml
 ```
 
 For OpenAI-compatible backends (Redpill, Groq, Ollama):
 
 ```bash
 pip install openai
+```
+
+For the Streamlit UI:
+
+```bash
+pip install streamlit pandas
 ```
 
 ## Quick start
@@ -110,6 +121,83 @@ class MyAgent(Agent):
         return f"Process: {board.get('input', str)}"
 ```
 
+## Streamlit UI
+
+A no-code interface for building and running pipelines without writing Python.
+
+```bash
+# Set credentials first
+export OPENAI_COMPAT_BASE_URL="https://api.red-pill.ai/v1"
+export OPENAI_COMPAT_API_KEY="sk-rp-..."
+# or
+export ANTHROPIC_API_KEY="sk-ant-..."
+
+streamlit run ui/app.py
+```
+
+Open **http://localhost:8501** in your browser.
+
+### What you can do
+
+- **Agent Library (sidebar)** — browse the built-in agents (Summarizer, Researcher, Writer, Reviewer, Classifier, Extractor), filter by name or role, and add them to your pipeline with one click
+- **Create New Agent** — define a custom agent through a form; saved as a YAML file in `ui/agents/` and available immediately
+- **Pipeline Builder** — reorder or remove steps with ↑ / ↓ / ✕ controls
+- **Seed Input** — set initial blackboard key-value pairs before the run
+- **Preview DAG** — renders the pipeline structure inline without executing it
+- **Run Pipeline** — executes the pipeline; streaming output goes to the terminal
+- **Results tabs** — inspect the final blackboard state per key, view a tracer table (tokens / cost / latency), or export raw JSON
+
+### Agent YAML format
+
+Agents are defined in `ui/agents/*.yaml`:
+
+```yaml
+name: MyAgent
+role: One-line description
+model: minimax/minimax-m2.5
+backend: openai_compatible   # or anthropic
+base_url: ""                 # falls back to OPENAI_COMPAT_BASE_URL env var
+system_prompt: |
+  You are a helpful assistant...
+reads:
+  - input
+writes:
+  - output
+max_tokens: 2048
+use_thinking: false
+```
+
+## Resilience features
+
+### Streaming truncation recovery
+
+When a model hits `max_tokens` mid-response, the agent automatically continues with a follow-up prompt and stitches the partial outputs together. Up to 2 continuations are attempted before parsing the partial result.
+
+### Agent timeouts
+
+```python
+class SlowAgent(Agent):
+    timeout_seconds = 30
+    timeout_action = "skip"   # "skip" | "raise" | fallback_agent_instance
+```
+
+### Error-based fallback
+
+```python
+class PrimaryAgent(Agent):
+    error_fallback = FallbackAgent()
+```
+
+If `PrimaryAgent` raises any exception, `FallbackAgent` runs in its place.
+
+### Schema validation feedback loop
+
+```python
+class MyAgent(Agent):
+    output_schema = MyPydanticModel
+    max_validation_retries = 2  # re-prompts with the exact error on parse failure
+```
+
 ## Backends
 
 ### Anthropic (default)
@@ -163,18 +251,24 @@ python -m orchestrator.examples.debate.main "AI will eliminate more jobs than it
 ```
 orchestrator/
 ├── core/
-│   ├── agent.py        # Base Agent class — streaming, JSON parsing, tracing
+│   ├── agent.py        # Base Agent class — streaming, truncation recovery, timeouts, fallback
 │   ├── blackboard.py   # Thread-safe typed key-value store
-│   ├── pipeline.py     # Fluent DSL builder
-│   ├── executor.py     # Async DAG walker (anyio)
+│   ├── pipeline.py     # Fluent DSL builder + DAG preview
+│   ├── executor.py     # Async DAG walker (anyio) with timeout handling
 │   └── tracer.py       # Token / cost / latency tracking
 ├── patterns/
 │   └── nodes.py        # SequentialNode, ParallelNode, LoopNode, BranchNode, FanOutNode
 ├── rendering/
 │   └── dag.py          # Rich tree visualiser
-└── examples/
-    ├── ai_startup/     # Full-stack MVP generator
-    └── debate/         # Multi-round debate system
+├── ui/
+│   ├── app.py          # Streamlit pipeline builder UI
+│   ├── registry.py     # YAML agent loader + dynamic class builder
+│   └── agents/         # Built-in agent definitions (*.yaml)
+├── examples/
+│   ├── ai_startup/     # Full-stack MVP generator
+│   └── debate/         # Multi-round debate system
+└── tests/
+    └── test_enhancements.py  # Smoke tests for resilience features
 ```
 
 ## Tracer output
