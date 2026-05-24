@@ -24,6 +24,62 @@ if TYPE_CHECKING:
 console = Console()
 
 
+async def _run_with_timeout(agent: "Agent", board: "Blackboard", tracer: "Tracer | None") -> None:
+    """
+    Run an agent with optional timeout and error-fallback enforcement.
+
+    Timeout behaviour (agent.timeout_action):
+      "skip"    — log a warning and continue
+      "raise"   — raise TimeoutError, aborting the pipeline
+      <Agent>   — run the fallback agent instead
+
+    Error fallback (agent.error_fallback):
+      None      — exception propagates normally
+      <Agent>   — run this agent instead when any exception is raised
+    """
+    timeout = agent.timeout_seconds
+
+    try:
+        if timeout is None:
+            await anyio.to_thread.run_sync(lambda: agent.run(board, tracer))
+            return
+
+        with anyio.move_on_after(timeout) as scope:
+            await anyio.to_thread.run_sync(
+                lambda: agent.run(board, tracer), cancellable=True
+            )
+
+        if scope.cancelled_caught:
+            action = agent.timeout_action
+            if action == "skip":
+                console.print(
+                    f"\n[bold yellow]⏱ {agent.name} timed out after {timeout}s — skipping[/bold yellow]"
+                )
+            elif action == "raise":
+                raise TimeoutError(
+                    f"{agent.name} exceeded timeout_seconds={timeout}"
+                )
+            else:
+                # Assume it's a fallback Agent instance
+                console.print(
+                    f"\n[bold yellow]⏱ {agent.name} timed out after {timeout}s — "
+                    f"running fallback: {action.name}[/bold yellow]"
+                )
+                await anyio.to_thread.run_sync(lambda: action.run(board, tracer))
+
+    except TimeoutError:
+        raise  # timeout_action="raise" is intentional — don't intercept with error_fallback
+    except Exception as exc:
+        fallback = agent.error_fallback
+        if fallback is None:
+            raise
+        console.print(
+            f"\n[bold red]✖ {agent.name} failed: {exc}[/bold red]"
+            f"\n[yellow]  → running error fallback: {fallback.name}[/yellow]"
+        )
+        await anyio.to_thread.run_sync(lambda: fallback.run(board, tracer), cancellable=True)
+
+
 class Executor:
     """
     Walks a list of pipeline nodes and runs each one.
@@ -69,9 +125,7 @@ class Executor:
     # ------------------------------------------------------------------
 
     async def _run_sequential(self, node: SequentialNode, board: "Blackboard") -> None:
-        tracer = self.tracer
-        agent = node.agent
-        await anyio.to_thread.run_sync(lambda: agent.run(board, tracer))
+        await _run_with_timeout(node.agent, board, self.tracer)
 
     # ------------------------------------------------------------------
     # Parallel
@@ -82,14 +136,10 @@ class Executor:
             f"\n[bold blue]⚡ Running {len(node.agents)} agents in parallel: "
             f"{', '.join(a.name for a in node.agents)}[/bold blue]"
         )
-        tracer = self.tracer
 
         async with anyio.create_task_group() as tg:
             for agent in node.agents:
-                tg.start_soon(
-                    anyio.to_thread.run_sync,
-                    lambda a=agent: a.run(board, tracer),
-                )
+                tg.start_soon(_run_with_timeout, agent, board, self.tracer)
 
     # ------------------------------------------------------------------
     # Loop
@@ -103,9 +153,7 @@ class Executor:
             )
 
             for agent in node.agents:
-                await anyio.to_thread.run_sync(
-                    lambda a=agent: a.run(board, self.tracer)
-                )
+                await _run_with_timeout(agent, board, self.tracer)
 
             if node.until(board):
                 console.print("[green]✓ Loop condition satisfied[/green]")
@@ -134,7 +182,7 @@ class Executor:
         if isinstance(target, list):
             await self.run_pipeline(target, board)
         else:
-            await anyio.to_thread.run_sync(lambda: target.run(board, self.tracer))
+            await _run_with_timeout(target, board, self.tracer)
 
     # ------------------------------------------------------------------
     # FanOut / FanIn
@@ -153,9 +201,7 @@ class Executor:
             clone = BB(initial=board.snapshot())
             for k, v in extra.items():
                 clone.set(k, v, agent="fanout")
-            await anyio.to_thread.run_sync(
-                lambda: node.worker.run(clone, self.tracer)
-            )
+            await _run_with_timeout(node.worker, clone, self.tracer)
             results[idx] = clone.get(node.output_key)
 
         async with anyio.create_task_group() as tg:
@@ -168,6 +214,4 @@ class Executor:
         # Optionally run a FanIn agent on the main board
         if node.fanin:
             console.print(f"[bold blue]⑁ FanIn: {node.fanin.name}[/bold blue]")
-            await anyio.to_thread.run_sync(
-                lambda: node.fanin.run(board, self.tracer)
-            )
+            await _run_with_timeout(node.fanin, board, self.tracer)

@@ -1,0 +1,15 @@
+name: Extractor
+role: Pulls structured data (entities, dates, numbers) from unstructured text
+model: claude-opus-4-6
+backend: anthropic
+use_thinking: false
+system_prompt: |
+  You are a data extraction assistant. From the provided text, extract all
+  named entities (people, organizations, locations), dates, and key numeric
+  values. Return a JSON object with keys: "entities", "dates", "numbers".
+  Each value should be a list of strings. No markdown fences.
+reads:
+  - input
+writes:
+  - extracted
+max_tokens: 1024
