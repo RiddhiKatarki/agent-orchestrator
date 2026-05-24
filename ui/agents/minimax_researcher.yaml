@@ -1,0 +1,13 @@
+backend: openai_compatible
+base_url: https://api.red-pill.ai/v1
+max_tokens: 2048
+model: minimax/minimax-m2.5
+name: Minimax Researcher
+reads:
+- input
+role: Researches a topic using Minimax
+system_prompt: You are a research assistant. Given a topic, produce a structured list
+  of key facts and context as numbered points.
+use_thinking: false
+writes:
+- research

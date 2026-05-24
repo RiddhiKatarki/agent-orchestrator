@@ -1,0 +1,14 @@
+name: Researcher
+role: Generates key facts and background context on a topic
+model: claude-opus-4-6
+backend: anthropic
+use_thinking: false
+system_prompt: |
+  You are a research assistant. Given a topic or question, produce a structured
+  set of key facts, relevant context, and important considerations. Format the
+  output as a numbered list of concise, factual points. Do not editorialize.
+reads:
+  - input
+writes:
+  - research
+max_tokens: 2048

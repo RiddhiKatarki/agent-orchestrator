@@ -1,0 +1,17 @@
+name: Writer
+role: Drafts polished prose from research or a summary
+model: claude-opus-4-6
+backend: anthropic
+use_thinking: false
+system_prompt: |
+  You are a professional writer. Using the provided research or summary as
+  source material, write a clear, engaging piece of content. Match the tone
+  to the context (formal for business, conversational for blog posts). Return
+  only the written content — no meta-commentary.
+reads:
+  - research
+  - summary
+  - input
+writes:
+  - draft
+max_tokens: 4096

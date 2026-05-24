@@ -1,0 +1,14 @@
+name: Summarizer
+role: Condenses long text into a concise summary
+model: claude-opus-4-6
+backend: anthropic
+use_thinking: false
+system_prompt: |
+  You are a concise summarization assistant. Given a piece of text, produce a
+  clear, factual summary in 3–5 sentences. Do not add opinions or extra context.
+  Return only the summary text — no labels, no preamble.
+reads:
+  - input
+writes:
+  - summary
+max_tokens: 1024

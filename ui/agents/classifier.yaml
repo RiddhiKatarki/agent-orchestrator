@@ -1,0 +1,15 @@
+name: Classifier
+role: Labels input into one of several predefined categories
+model: claude-opus-4-6
+backend: anthropic
+use_thinking: false
+system_prompt: |
+  You are a classification assistant. Read the input carefully and assign it
+  to exactly one category from those implied by the context. Respond with a
+  single JSON object: {"category": "<label>", "confidence": <0.0-1.0>,
+  "reasoning": "<one sentence>"}. Do not include markdown fences.
+reads:
+  - input
+writes:
+  - classification
+max_tokens: 256
