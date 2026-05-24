@@ -125,6 +125,20 @@ class MyAgent(Agent):
 
 A no-code interface for building and running pipelines without writing Python.
 
+### Screenshots
+
+**Agent Library & Pipeline Builder**
+![Agent Library and Pipeline Builder](docs/screenshots/ui-pipeline-builder.png)
+
+**DAG Preview**
+![DAG Preview](docs/screenshots/ui-dag-preview.png)
+
+**Blackboard Results**
+![Blackboard Results](docs/screenshots/ui-blackboard.png)
+
+**Tracer — Token & Cost Summary**
+![Tracer](docs/screenshots/ui-tracer.png)
+
 ```bash
 # Set credentials first
 export OPENAI_COMPAT_BASE_URL="https://api.red-pill.ai/v1"
