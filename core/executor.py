@@ -45,7 +45,9 @@ async def _run_with_timeout(agent: "Agent", board: "Blackboard", tracer: "Tracer
             return
 
         with anyio.move_on_after(timeout) as scope:
-            await anyio.to_thread.run_sync(lambda: agent.run(board, tracer))
+            await anyio.to_thread.run_sync(
+                lambda: agent.run(board, tracer), cancellable=True
+            )
 
         if scope.cancelled_caught:
             action = agent.timeout_action
@@ -75,7 +77,7 @@ async def _run_with_timeout(agent: "Agent", board: "Blackboard", tracer: "Tracer
             f"\n[bold red]✖ {agent.name} failed: {exc}[/bold red]"
             f"\n[yellow]  → running error fallback: {fallback.name}[/yellow]"
         )
-        await anyio.to_thread.run_sync(lambda: fallback.run(board, tracer))
+        await anyio.to_thread.run_sync(lambda: fallback.run(board, tracer), cancellable=True)
 
 
 class Executor:
