@@ -19,6 +19,7 @@ from orchestrator.patterns.nodes import (
 
 if TYPE_CHECKING:
     from orchestrator.core.agent import Agent
+    from orchestrator.core.checkpoint import CheckpointStore
     from orchestrator.core.tracer import Tracer
 
 
@@ -155,33 +156,82 @@ class Pipeline:
         *,
         tracer: "Tracer | None" = None,
         show_dag: bool = False,
+        run_id: str | None = None,
+        checkpoint_store: "CheckpointStore | None" = None,
+        resume: bool = False,
     ) -> Blackboard:
         """
         Execute the pipeline synchronously.
 
         Parameters
         ----------
-        initial  : Seed the blackboard before any agent runs.
-                   - str  → written as board["input"]
-                   - dict → each key/value written to the board
-        tracer   : Optional Tracer to record token usage and timing.
-        show_dag : If True, render the pipeline DAG before execution starts.
+        initial           : Seed the blackboard before any agent runs.
+                            - str  → written as board["input"]
+                            - dict → each key/value written to the board
+        tracer            : Optional Tracer to record token usage and timing.
+        show_dag          : If True, render the pipeline DAG before execution.
+        run_id            : Stable identifier for this run. Required when using
+                            checkpoint_store.
+        checkpoint_store  : A CheckpointStore instance. When set, the blackboard
+                            is persisted to disk after every node completes.
+        resume            : If True and a checkpoint exists for run_id, restore
+                            the board from that checkpoint and skip already-
+                            completed nodes. Requires checkpoint_store + run_id.
 
         Returns the final Blackboard state.
         """
+        from rich.console import Console
+        _console = Console()
+
         if show_dag:
             self.preview()
 
+        start_index = 0
         board = Blackboard()
 
+        # --- Seed initial values ---
         if isinstance(initial, str):
             board.set("input", initial, agent="user")
         elif isinstance(initial, dict):
             for k, v in initial.items():
                 board.set(k, v, agent="user")
 
-        executor = Executor(tracer=tracer)
+        # --- Resume from checkpoint ---
+        if resume and checkpoint_store is not None and run_id is not None:
+            saved = checkpoint_store.load(run_id)
+            if saved is not None:
+                start_index, snapshot = saved
+                for k, v in snapshot.items():
+                    board.set(k, v, agent="checkpoint")
+                _console.print(
+                    f"\n[bold green]⟳ Resuming run '{run_id}' "
+                    f"from node {start_index}/{len(self._nodes)}[/bold green]"
+                )
+            else:
+                _console.print(
+                    f"\n[yellow]No checkpoint found for run_id='{run_id}' — "
+                    f"starting from scratch[/yellow]"
+                )
+
+        # --- Checkpoint callback ---
+        def _on_node_complete(next_index: int, board: Blackboard) -> None:
+            if checkpoint_store is not None and run_id is not None:
+                checkpoint_store.save(run_id, next_index, board)
+
+        executor = Executor(
+            tracer=tracer,
+            on_node_complete=_on_node_complete if checkpoint_store else None,
+            start_index=start_index,
+        )
         anyio.run(executor.run_pipeline, self._nodes, board)
+
+        # --- Delete checkpoint on clean completion ---
+        if checkpoint_store is not None and run_id is not None:
+            checkpoint_store.delete(run_id)
+            _console.print(
+                f"[dim]✓ Checkpoint '{run_id}' cleared after successful run[/dim]"
+            )
+
         return board
 
     def __repr__(self) -> str:
