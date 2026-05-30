@@ -89,18 +89,34 @@ class Executor:
     - LoopNode        → repeatedly runs a sequence until condition or max hit
     - BranchNode      → evaluates condition, routes to one of two paths
     - FanOutNode      → fans a worker out across N inputs, gathers results
+
+    Optional callback
+    -----------------
+    on_node_complete(node_index, board) is called after every top-level node
+    finishes. The pipeline uses this to write checkpoints.
     """
 
-    def __init__(self, tracer: "Tracer | None" = None) -> None:
+    def __init__(
+        self,
+        tracer: "Tracer | None" = None,
+        on_node_complete: "callable | None" = None,
+        start_index: int = 0,
+    ) -> None:
         self.tracer = tracer
+        self.on_node_complete = on_node_complete
+        self.start_index = start_index
 
     # ------------------------------------------------------------------
     # Entry point
     # ------------------------------------------------------------------
 
     async def run_pipeline(self, nodes: list[Node], board: "Blackboard") -> None:
-        for node in nodes:
+        for absolute_index, node in enumerate(nodes):
+            if absolute_index < self.start_index:
+                continue
             await self._run_node(node, board)
+            if self.on_node_complete is not None:
+                self.on_node_complete(absolute_index + 1, board)
 
     # ------------------------------------------------------------------
     # Node dispatch
